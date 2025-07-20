@@ -1,0 +1,27 @@
+# Python virtual environment
+venv/
+env/
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Secrets file - VERY IMPORTANT
+# This prevents your API key from being uploaded to a public repository.
+.env
+
+# Streamlit config directory
+.streamlit/
+
+# IDE and editor directories
+.vscode/
+.idea/
+
+# OS-specific files
+.DS_Store
+
+# Optional: Uncomment line below to restrict memory files
+#memory/

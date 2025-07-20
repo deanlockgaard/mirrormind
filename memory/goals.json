@@ -1,0 +1,22 @@
+# ==============================================================================
+# File: memory/goals.json
+# Description: Your defined goals.
+# ==============================================================================
+[
+  {
+    "name": "Achieve financial stability as a solo creator",
+    "description": "Build a lifestyle business that provides economic strength and personal freedom."
+  },
+  {
+    "name": "Launch a polished AI companion app MVP",
+    "description": "Release the first version of the assistant app to a small group of trusted users."
+  },
+  {
+    "name": "Deepen connections with my new community",
+    "description": "Continue to invest time and energy in the friendships I've built at the community center."
+  },
+  {
+    "name": "Explore creative expression through a new project",
+    "description": "Begin outlining a new creative work, whether it's a film or another product, that reflects my values."
+  }
+]
