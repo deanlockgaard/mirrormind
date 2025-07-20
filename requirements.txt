@@ -1,8 +1,8 @@
-# ==============================================================================
-# File: requirements.txt
-# Description: The libraries needed to run the project.
-# ==============================================================================
 streamlit
 python-dotenv
 PyYAML
 google-generativeai
+sentence-transformers
+faiss-cpu
+numpy
+scikit-learn

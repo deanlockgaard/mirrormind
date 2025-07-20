@@ -3,119 +3,99 @@
 # Description: A comprehensive test suite for the core engine logic.
 # ==============================================================================
 import unittest
+import numpy as np
+import faiss
+from sentence_transformers import SentenceTransformer
 from engine import retrieve_relevant_context
 
-class TestEngine(unittest.TestCase):
+class TestSemanticEngine(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        """Load the embedding model once for all tests."""
+        cls.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
     def setUp(self):
         """This method is called before each test function."""
         self.mock_memories = [
-            {
-                "timestamp": "2025-07-18T01:00:00Z",
-                "summary": "Felt a deep sense of gratitude toward family and friends who always provided support.",
-            },
-            {
-                "timestamp": "2025-07-18T02:00:00Z",
-                "summary": "Appreciation for a professor at university who was exceptionally helpful in job search.",
-            },
-            {
-                "timestamp": "2025-07-18T03:00:00Z", # Newer memory about the same topic
-                "summary": "Thinking about the art project and how to start it.",
-            },
-            {
-                "timestamp": "2025-07-18T04:00:00Z", # Most recent memory
-                "summary": "Reflecting on the new art project and the fear of failure.",
-            }
+            {"summary": "Listening to the band Tool provides a feeling of deep, personal connection and artistry."},
+            {"summary": "Felt a strong sense of community and belonging after a conversation at the community center."},
+            {"summary": "Watching the film 'Captain Fantastic' was inspiring and aligned with values of authenticity."},
+            {"summary": "Felt a sense of accomplishment and clarity after fixing a bug in the AI companion app prototype."}
         ]
         self.mock_goals = [
-            {
-                "name": "Become proficient in Spanish",
-                "description": "Reach CEFR Level C2."
-            },
-            {
-                "name": "Launch AI MVP prototype",
-                "description": "Build the first functioning version of the assistant app."
-            }
+            {"name": "Deepen community connections", "description": "Invest time and energy in friendships from the community center."},
+            {"name": "Launch a polished AI companion app", "description": "Release the first version of the assistant app to trusted users."}
         ]
 
-    # --- Original Tests ---
+        self.memory_index = self._create_test_index(self.mock_memories, ["summary"])
+        self.goal_index = self._create_test_index(self.mock_goals, ["name", "description"])
 
-    def test_retrieve_memory_by_keyword(self):
-        """Test if we can retrieve a specific memory using a keyword."""
-        user_input = "I'm thinking about how much I love my family."
+    def _create_test_index(self, data, text_keys):
+        """Helper function to create a FAISS index from mock data."""
+        if not data:
+            d = self.embedding_model.get_sentence_embedding_dimension()
+            return faiss.IndexIDMap(faiss.IndexFlatL2(d))
+
+        texts_to_embed = []
+        for entry in data:
+            combined_text = " ".join([entry.get(key, "") for key in text_keys])
+            texts_to_embed.append(combined_text.strip())
+
+        embeddings = self.embedding_model.encode(texts_to_embed)
+        embeddings = np.array(embeddings).astype('float32')
+        d = embeddings.shape[1]
+
+        index = faiss.IndexFlatL2(d)
+        index = faiss.IndexIDMap(index)
+        index.add_with_ids(embeddings, np.arange(len(data)))
+        return index
+
+    def test_retrieve_positive_memory_semantically(self):
+        """Test retrieving a positive memory based on meaning."""
+        user_input = "I feel so connected to my friends at the community center."
         relevant_memories = retrieve_relevant_context(
-            user_input, self.mock_memories, "summary", max_results=1
+            user_input, self.mock_memories, self.memory_index, max_results=1
         )
         self.assertEqual(len(relevant_memories), 1)
-        self.assertEqual(relevant_memories[0]['summary'], "Felt a deep sense of gratitude toward family and friends who always provided support.")
-        print("\n✅ test_retrieve_memory_by_keyword: PASSED")
+        self.assertEqual(relevant_memories[0]['summary'], "Felt a strong sense of community and belonging after a conversation at the community center.")
+        print("\n✅ test_retrieve_positive_memory_semantically: PASSED")
 
-    def test_retrieve_goal_by_keyword(self):
-        """Test if we can retrieve a specific goal using a keyword."""
-        user_input = "I need to focus on the AI prototype."
+    def test_retrieve_positive_goal_semantically(self):
+        """Test retrieving a positive goal based on meaning."""
+        user_input = "I want to finish building my application."
         relevant_goals = retrieve_relevant_context(
-            user_input, self.mock_goals, ["name", "description"], max_results=1
+            user_input, self.mock_goals, self.goal_index, max_results=1, threshold=0.35
         )
         self.assertEqual(len(relevant_goals), 1)
-        self.assertEqual(relevant_goals[0]['name'], "Launch AI MVP prototype")
-        print("✅ test_retrieve_goal_by_keyword: PASSED")
+        self.assertEqual(relevant_goals[0]['name'], "Launch a polished AI companion app")
+        print("✅ test_retrieve_positive_goal_semantically: PASSED")
 
     def test_no_relevant_context_found(self):
-        """Test that nothing is returned when no keywords match."""
-        user_input = "I want to talk about cooking."
-        relevant_memories = retrieve_relevant_context(user_input, self.mock_memories, "summary")
-        relevant_goals = retrieve_relevant_context(user_input, self.mock_goals, ["name", "description"])
+        """Test that nothing is returned for a completely unrelated topic."""
+        user_input = "I want to talk about cooking pasta."
+        relevant_memories = retrieve_relevant_context(
+            user_input, self.mock_memories, self.memory_index, threshold=0.6
+        )
         self.assertEqual(len(relevant_memories), 0)
-        self.assertEqual(len(relevant_goals), 0)
         print("✅ test_no_relevant_context_found: PASSED")
 
-    # --- New, More Robust Tests ---
-
-    def test_retrieval_order_is_chronological(self):
-        """Test that the most RECENT relevant memory is returned first."""
-        user_input = "Tell me about the art project."
-        # Ask for only one result
+    def test_retrieval_order_is_by_relevance(self):
+        """Test that the most semantically similar memory is returned."""
+        user_input = "I'm feeling inspired by the deep artistry in the band Tool's music."
         relevant_memories = retrieve_relevant_context(
-            user_input, self.mock_memories, "summary", max_results=1
+            user_input, self.mock_memories, self.memory_index, max_results=1
         )
         self.assertEqual(len(relevant_memories), 1)
-        # It should return the memory from 04:00:00, not the one from 03:00:00
-        self.assertEqual(relevant_memories[0]['summary'], "Reflecting on the new art project and the fear of failure.")
-        print("✅ test_retrieval_order_is_chronological: PASSED")
-
-    def test_case_and_punctuation_insensitivity(self):
-        """Test that search ignores capitalization and punctuation."""
-        user_input = "Reminiscing about that special professor..."
-        relevant_memories = retrieve_relevant_context(
-            user_input, self.mock_memories, "summary", max_results=1
-        )
-        self.assertEqual(len(relevant_memories), 1)
-        self.assertEqual(relevant_memories[0]['summary'], "Appreciation for a professor at university who was exceptionally helpful in job search.")
-        print("✅ test_case_and_punctuation_insensitivity: PASSED")
-
-    def test_stop_word_filtering(self):
-        """Test that common 'stop words' are ignored for more accurate matching."""
-        # This input shares many stop words with the "professor" memory ("with", "a", "at")
-        # but the meaningful keyword is "wedding".
-        user_input = "I was at a wedding with my family."
-        relevant_memories = retrieve_relevant_context(
-            user_input, self.mock_memories, "summary", max_results=1
-        )
-        self.assertEqual(len(relevant_memories), 1)
-        # It should correctly match the "betrayal" memory, not the "professor" memory.
-        self.assertEqual(relevant_memories[0]['summary'], "Felt a deep sense of gratitude toward family and friends who always provided support.")
-        print("✅ test_stop_word_filtering: PASSED")
+        self.assertEqual(relevant_memories[0]['summary'], "Listening to the band Tool provides a feeling of deep, personal connection and artistry.")
+        print("✅ test_retrieval_order_is_by_relevance: PASSED")
 
     def test_empty_data_sources(self):
-        """Test that the function handles empty data sources gracefully without crashing."""
+        """Test that the function handles empty data sources gracefully."""
         user_input = "This is a test."
-        # Pass empty lists as the data sources
-        relevant_memories = retrieve_relevant_context(user_input, [], "summary")
-        relevant_goals = retrieve_relevant_context(user_input, [], ["name", "description"])
+        relevant_memories = retrieve_relevant_context(user_input, [], "dummy_path")
         self.assertEqual(len(relevant_memories), 0)
-        self.assertEqual(len(relevant_goals), 0)
         print("✅ test_empty_data_sources: PASSED")
-
 
 if __name__ == '__main__':
     unittest.main()

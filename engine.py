@@ -1,38 +1,43 @@
 # ==============================================================================
 # File: engine.py
-# Description: The core logic for retrieving context and generating responses.
+# Description: The core logic, now upgraded to use semantic search.
 # ==============================================================================
 import json
 import os
 import yaml
 from datetime import datetime
+import google.generativeai as genai
+from dotenv import load_dotenv
+import faiss
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+# --- Load environment variables ---
+load_dotenv()
 
 # --- Constants ---
 MEMORY_FILE = "memory/core_memory.json"
 GOALS_FILE = "memory/goals.json"
 CONSTITUTION_FILE = "user_profile/constitution.yaml"
+MEMORY_INDEX_FILE = "memory/faiss_memory_index.bin"
+GOALS_INDEX_FILE = "memory/faiss_goals_index.bin"
+MODEL_NAME = 'all-MiniLM-L6-v2' # The local model for embeddings
 
-# --- A set of common English stop words to ignore during search ---
-# NOTE: This list has been expanded to improve search accuracy.
-STOP_WORDS = set([
-    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
-    "any", "are", "as", "at", "be", "because", "been", "before", "being", "below",
-    "between", "both", "but", "by", "can", "did", "do", "does", "doing", "down",
-    "during", "each", "few", "for", "from", "further", "had", "has", "have", "having",
-    "he", "her", "here", "hers", "herself", "him", "himself", "his", "how", "i", "if",
-    "in", "into", "is", "it", "its", "itself", "just", "me", "more", "most", "my",
-    "myself", "no", "nor", "not", "now", "of", "off", "on", "once", "only", "or",
-    "other", "our", "ours", "ourselves", "out", "over", "own", "s", "same", "she",
-    "should", "so", "some", "such", "t", "than", "that", "the", "their", "theirs",
-    "them", "themselves", "then", "there", "these", "they", "this", "those", "through",
-    "to", "too", "under", "until", "up", "very", "was", "we", "were", "what", "when",
-    "where", "which", "while", "who", "whom", "why", "will", "with", "you", "your",
-    "yours", "yourself", "yourselves", "i'm", "thinking", "feeling", "felt", "about", "issues"
-])
+# --- Initialize Models ---
+print("Engine: Loading local sentence transformer model for embeddings...")
+embedding_model = SentenceTransformer(MODEL_NAME)
+print("Engine: Embedding model loaded.")
+
+try:
+    genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
+    llm_model = genai.GenerativeModel('gemini-1.5-flash')
+    print("Engine: Gemini API configured successfully.")
+except Exception as e:
+    print(f"Engine: Error configuring Gemini API: {e}")
+    llm_model = None
 
 # --- Data Loading and Saving Functions ---
 def load_json_data(filepath):
-    """Safely loads data from a JSON file."""
     if os.path.exists(filepath):
         with open(filepath, "r") as f:
             try:
@@ -42,14 +47,12 @@ def load_json_data(filepath):
     return []
 
 def load_yaml_data(filepath):
-    """Safely loads data from a YAML file."""
     if os.path.exists(filepath):
         with open(filepath, "r") as f:
             return yaml.safe_load(f)
     return {}
 
 def save_memory(user_input, assistant_reply, summary):
-    """Saves a new memory entry to the JSON file."""
     memories = load_json_data(MEMORY_FILE)
     new_memory = {
         "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -62,46 +65,38 @@ def save_memory(user_input, assistant_reply, summary):
     with open(MEMORY_FILE, "w") as f:
         json.dump(memories, f, indent=2)
 
-# --- Context Retrieval Functions ---
-def retrieve_relevant_context(user_input, data, text_key, max_results=2):
-    """
-    A more robust keyword-based retrieval function.
-    Finds the most recent entries that share meaningful keywords with the user_input.
-    """
-    # Clean the input by removing punctuation and filtering stop words
-    clean_input = ''.join(c for c in user_input.lower() if c.isalnum() or c.isspace())
-    keywords = set(clean_input.split()) - STOP_WORDS
+# --- Semantic Context Retrieval ---
+def search_index(query_embedding, index, data, max_results, threshold=0.5):
+    """Core search logic that filters results by a similarity threshold."""
+    distances, indices = index.search(query_embedding, max_results)
 
     matches = []
+    if indices.size > 0:
+        for i, dist in zip(indices[0], distances[0]):
+            if i != -1:
+                similarity = 1 / (1 + dist)
+                if similarity >= threshold:
+                    matches.append(data[i])
+    return matches
 
-    # Iterate backwards through the data to find the most recent matches first
-    for entry in reversed(data):
-        # Combine relevant text fields from the entry for matching
-        entry_text_raw = ""
-        if isinstance(text_key, list):
-            for key in text_key:
-                entry_text_raw += entry.get(key, "") + " "
-        else:
-            entry_text_raw += entry.get(text_key, "")
+def retrieve_relevant_context(user_input, data, index_path_or_obj, max_results=2, threshold=0.5):
+    """Retrieves context using a FAISS index, accepting a path or a pre-loaded object."""
+    if not data:
+        return []
 
-        # Clean the entry text and filter out stop words
-        clean_entry_text = ''.join(c for c in entry_text_raw.lower() if c.isalnum() or c.isspace())
-        entry_keywords = set(clean_entry_text.split()) - STOP_WORDS
+    index = None
+    if isinstance(index_path_or_obj, str):
+        if not os.path.exists(index_path_or_obj):
+            return []
+        index = faiss.read_index(index_path_or_obj)
+    else:
+        index = index_path_or_obj
 
-        # Check for any overlapping meaningful keywords
-        if keywords & entry_keywords:
-            matches.append(entry)
+    query_embedding = embedding_model.encode([user_input])
+    return search_index(query_embedding, index, data, max_results, threshold=threshold)
 
-        # Stop searching once we have found enough matches
-        if len(matches) >= max_results:
-            break
-
-    # The matches are in reverse chronological order, so we reverse them back.
-    return list(reversed(matches))
-
-# --- Prompt Formatting Functions ---
+# --- Prompt Formatting ---
 def format_context_for_prompt(context_data, title, text_key):
-    """Formats a list of context entries into a string for the prompt."""
     if not context_data:
         return ""
 
@@ -117,35 +112,32 @@ def format_context_for_prompt(context_data, title, text_key):
 
 # --- Main Engine Function ---
 def get_response(user_input):
-    """
-    The main function that orchestrates context retrieval and response generation.
-    """
-    # 1. Load all data sources
+    if not llm_model:
+        return "Error: Gemini API is not configured. Please check your API key."
+
     memories = load_json_data(MEMORY_FILE)
     goals = load_json_data(GOALS_FILE)
     constitution = load_yaml_data(CONSTITUTION_FILE)
 
-    # 2. Retrieve relevant context from each source
-    relevant_memories = retrieve_relevant_context(user_input, memories, "summary")
-    relevant_goals = retrieve_relevant_context(user_input, goals, ["name", "description"])
+    relevant_memories = retrieve_relevant_context(user_input, memories, MEMORY_INDEX_FILE)
+    relevant_goals = retrieve_relevant_context(user_input, goals, GOALS_INDEX_FILE)
 
-    # 3. Format the retrieved context into clean text blocks
     memory_context = format_context_for_prompt(relevant_memories, "Memories", "summary")
     goal_context = format_context_for_prompt(relevant_goals, "Goals", ["name", "description"])
 
-    # 4. Construct the full prompt for the LLM
-    system_prompt = f"Your persona is defined by these principles: {json.dumps(constitution, indent=2)}\n\n"
-    full_prompt = system_prompt + goal_context + memory_context + f"User's current thought: {user_input}\n\nAI Companion's reflection:"
+    system_instruction = f"Your persona is AI Companion. Adhere strictly to these principles: {json.dumps(constitution, indent=2)}"
+    user_prompt = goal_context + memory_context + f"User's current thought: {user_input}\n\nAI Companion's reflection:"
 
-    # 5. Generate a (mock) response
-    mock_reply = (
-        "*(This is a mock response. The full prompt that would be sent to the LLM is shown below for testing purposes.)*\n\n"
-        "--- START OF PROMPT ---\n"
-        f"{full_prompt}"
-        "--- END OF PROMPT ---"
-    )
+    try:
+        full_prompt = [{'role':'user', 'parts': [system_instruction, user_prompt]}]
+        print("="*50 + "\nPROMPT SENT TO GEMINI API:\n" + "="*50 + f"\n{user_prompt}\n" + "="*50)
 
-    # 6. Save the new interaction to memory
-    save_memory(user_input=user_input, assistant_reply=mock_reply, summary=user_input)
-    
-    return mock_reply
+        response = llm_model.generate_content(full_prompt)
+        final_reply = response.text
+    except Exception as e:
+        print(f"An error occurred during API call: {e}")
+        final_reply = "I'm sorry, I encountered an error while trying to think. Please check the console for details."
+
+    save_memory(user_input=user_input, assistant_reply=final_reply, summary=user_input)
+
+    return final_reply
