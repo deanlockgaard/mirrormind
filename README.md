@@ -2,7 +2,7 @@
 
 MirrorMind is an AI-powered reflective companion designed to help you uncover emotional patterns, align with your goals, and track your inner evolution over time.
 
-Unlike traditional journaling tools or productivity chatbots, MirrorMind focuses on interpretation, memory, and coherence, building a rich, longitudinal understanding of you, not just your tasks.
+Unlike traditional journaling tools or productivity chatbots, MirrorMind focuses on interpretation, memory, and coherence- building a rich, longitudinal understanding of you, not just your tasks.
 
 ---
 
