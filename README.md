@@ -142,6 +142,6 @@ MIT License
 
 ---
 
-## ✨ Created With
+## ✨ Credits
 
-Philosophy, emotion, a recognition of connection, and a desire to build a mirror that thinks back.
+Created by Dean Lockgaard
